@@ -162,6 +162,11 @@ http://localhost:8050
 ### **4. Docker Deployment**
 To deploy the application using Docker:
 
+#### **Step 0 : Unzip the Reviews data file**
+```bash
+unzip data/full/full_reviews.zip -d data/full/
+```
+
 #### **Step 1: Build the Docker Image**
 ```bash
 docker build -t bertopic-container .
