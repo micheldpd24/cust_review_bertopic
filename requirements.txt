@@ -1,0 +1,13 @@
+pandas
+pyyaml
+sentence-transformers
+scikit-learn
+bertopic
+hf_xet
+gensim
+matplotlib
+plotly
+tqdm
+dash
+
+
