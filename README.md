@@ -173,7 +173,7 @@ docker run -p 8051:8050 \
            -v "$PWD/data/full:/data/full" \
            -v "$PWD/data/output:/data/output" \
            -v "$PWD:/app" \
-           bertopic-container python /app/main.py
+           bertopic-container
 ```
 
 Access the dashboard at:
@@ -194,47 +194,11 @@ The pipeline evaluates the topic model using the following metrics:
 
 ---
 
-## **Contributing**
-Contributions are welcome! Please follow these steps:
-1. Fork the repository.
-2. Create a new branch for your feature or bugfix.
-3. Submit a pull request with a detailed description of your changes.
-
----
-
 ## **License**
 This project is licensed under the **MIT License**. See the `LICENSE` file for details.
 
 ---
 
-## **Contact**
-For questions or feedback, please contact:
-- Email: [your-email@example.com]
-- GitHub: [your-github-username]
-```
+Feel free to reach out with any questions or suggestions! 🚀
 
----
 
-### Instructions for Adding Images
-1. **Save Your Screenshots**:
-   - Take screenshots of your dashboard and save them in a folder named `assets` within your repository (e.g., `assets/topic_overview.png`).
-
-2. **Reference Images in Markdown**:
-   - Use the Markdown image syntax to embed the images:
-     ```markdown
-     ![Alt Text](path/to/image.png)
-     ```
-   - For example:
-     ```markdown
-     ![Topic Overview](assets/topic_overview.png)
-     ```
-
-3. **Commit and Push Changes**:
-   - Add the `assets` folder and the updated `README.md` to your Git repository:
-     ```bash
-     git add assets README.md
-     git commit -m "Add dashboard screenshots to README"
-     git push
-     ```
-
-By following these steps, you'll have a visually appealing `README.md` that effectively showcases your dashboard's capabilities.
