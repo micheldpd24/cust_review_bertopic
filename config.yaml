@@ -33,5 +33,5 @@ evaluation:
 
 output:
   save_model: true
-  output_dir: "/data/output/models"
+  output_dir: "/data/output"
   dashboard_port: 8050
