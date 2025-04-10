@@ -542,7 +542,7 @@ def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, cohere
                                     reduced_embeddings=reduced_embeddings,
                                     docs=docs,
                                     width=800,
-                                    height=600
+                                    height=800
                                 ),
                                 style={"height": "600px"}
                             )

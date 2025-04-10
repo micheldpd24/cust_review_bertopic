@@ -25,4 +25,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 8050
 
 # Default command to execute the script
-CMD ["python", "topic.py"]
+CMD ["python", "main.py"]

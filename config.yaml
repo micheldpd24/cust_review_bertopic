@@ -1,9 +1,9 @@
 # config.yaml
 # -----------
 data:
-  input_filepath: "../data/full/negative_reviews.csv"
+  input_filepath: "/data/full/full_reviews.csv"
   review_column: "review"
-  sample_size: null   # Use null for all data
+  sample_size: null  # Use null for all data
 
 model:
   transformer_name: "all-MiniLM-L6-v2"
@@ -29,9 +29,9 @@ evaluation:
     - "c_v"
     - "u_mass"
     - "c_npmi"
-  sample_size: 10000  # For coherence calculation
+  sample_size: 2900  # For coherence calculation
 
 output:
   save_model: true
-  output_dir: "../data/output/models"
+  output_dir: "/data/output/models"
   dashboard_port: 8050
