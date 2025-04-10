@@ -88,13 +88,18 @@ A distribution plot showing the probability distribution of topics across the da
 The pipeline is configured using a YAML file (`config.yaml`). Below is an example configuration:
 
 ```yaml
+# config.yaml
+# -----------
 data:
-  input_filepath: "data/full/reviews.csv"  # Path to the input CSV file
-  review_column: "review"                 # Column containing review texts
-  sample_size: null                       # Optional: Number of reviews to sample
+  input_filepath: "/data/full/full_reviews.csv"     # Path to the input CSV file
+  review_column: "review"                           # Column containing review texts
+  sample_size: null                                 # Optional: Number of reviews to sample
 
 model:
-  transformer_name: "sentence-transformers/all-MiniLM-L6-v2"
+  transformer_name: "all-MiniLM-L6-v2"
+  language: "french"
+  min_topic_size: 10
+  nr_topics: "auto"
   umap:
     n_neighbors: 15
     n_components: 5
@@ -104,20 +109,22 @@ model:
     min_cluster_size: 15
     metric: "euclidean"
     cluster_selection_method: "eom"
+    prediction_data: true
   vectorizer:
+    stop_words: None
     ngram_range: [1, 2]
-  min_topic_size: 10
-  language: "english"
-  nr_topics: "auto"
 
 evaluation:
-  sample_size: 1000                       # Number of documents for coherence calculation
-  coherence_metrics: ["c_v", "u_mass"]   # Coherence metrics to calculate
+  coherence_metrics:                     # Coherence metrics to calculate
+    - "c_v"
+    - "u_mass"
+    - "c_npmi"
+  sample_size: 2900                     # For coherence calculation
 
 output:
-  output_dir: "data/output"             # Directory to save model outputs
-  save_model: true                       # Whether to save the trained model
-  dashboard_port: 8050                   # Port for the Dash dashboard
+  save_model: true                      # Whether to save the trained model
+  output_dir: "/data/output/models"     # Directory to save model outputs
+  dashboard_port: 8050                  # Port for the Dash dashboard
 ```
 
 ---
