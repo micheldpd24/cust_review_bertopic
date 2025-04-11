@@ -1,4 +1,4 @@
-# **BERTopic Customer Review Topic Modeling**
+# **BERTopic Customer Reviews Topic Modeling**
 
 ## **Overview**
 This project uses **BERTopic**, a powerful topic modeling library, to analyze customer reviews and extract meaningful topics. The pipeline is designed to be modular, scalable, and easy to integrate into an ETL (Extract, Transform, Load) pipeline. It includes:
@@ -42,8 +42,9 @@ The project is organized as follows:
 ├── Dockerfile               # Docker configuration for containerization
 ├── requirements.txt         # Python dependencies
 ├── config.yaml              # Configuration file for pipeline parameters
+├── assets/                  # Dashboard screenshots
 ├── data/                    # Directory for input/output data
-│   ├── full/                # Raw customer reviews (CSV files)
+│   ├── full/                # Raw customer reviews (zip file of customer reviews csv file)
 │   └── results/             # Output directory for model artifacts
 └── README.md                # Project documentation
 ```
@@ -196,6 +197,10 @@ The pipeline evaluates the topic model using the following metrics:
 
 2. **Topic Diversity**:
    - Measures the uniqueness of topics by calculating the ratio of unique words to total words across all topics.
+
+---
+## **References**
+[ Maarten Grootendorst. Leveraging BERT and c-TF-IDF to create easily interpretable topics](https://github.com/MaartenGr/BERTopic)
 
 ---
 
