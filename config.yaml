@@ -1,14 +1,15 @@
 # config.yaml
 # -----------
 data:
-  input_filepath: "/data/full/full_reviews.csv"
+  input_filepath: "data/full/full_reviews.csv"
   review_column: "review"
+  timestamps_column: "yearMonth"
   sample_size: null  # Use null for all data
 
 model:
   transformer_name: "all-MiniLM-L6-v2"
   language: "french"
-  min_topic_size: 10
+  min_topic_size: 20
   nr_topics: "auto"
   umap:
     n_neighbors: 15
@@ -29,9 +30,8 @@ evaluation:
     - "c_v"
     - "u_mass"
     - "c_npmi"
-  sample_size: 2900  # For coherence calculation
 
 output:
   save_model: true
-  output_dir: "/data/output"
+  output_dir: "data/results"
   dashboard_port: 8050
