@@ -40,6 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
 class DataLoader:
     """Load and preprocess the data for topic modeling."""
     
@@ -52,47 +53,59 @@ class DataLoader:
         """
         self.input_filepath = config["input_filepath"]
         self.review_column = config.get("review_column", "review")
+        self.timestamp_column = config.get("timestamp_column", "yearMonth")
         self.sample_size = config.get("sample_size", None)
         
-    def load_reviews(self) -> pd.Series:
+    def load_reviews(self) -> pd.DataFrame:
         """
         Load and preprocess reviews from a CSV file.
         
         Returns:
-            pd.Series: Series of review texts with missing values removed
+            pd.DataFrame: DataFrame containing 'review' and 'yearMonth' columns.
         """
         logger.info(f"Loading data from {self.input_filepath}")
         try:
+            # Load the dataset
             df = pd.read_csv(self.input_filepath)
-            logger.info(f"Total documents: {len(df)}")
+            logger.info(f"Total documents loaded: {len(df)}")
             
-            # Check if review column exists
+            # Check if required columns exist
             if self.review_column not in df.columns:
                 available_cols = ", ".join(df.columns)
                 logger.error(f"Review column '{self.review_column}' not found. Available columns: {available_cols}")
                 raise ValueError(f"Review column '{self.review_column}' not found in dataset")
             
-            # Report missing values
-            missing = df[self.review_column].isna().sum()
-            logger.info(f"Missing values: {missing} ({missing/len(df):.2%})")
+            if self.timestamp_column not in df.columns:
+                available_cols = ", ".join(df.columns)
+                logger.error(f"Timestamp column '{self.timestamp_column}' not found. Available columns: {available_cols}")
+                raise ValueError(f"Timestamp column '{self.timestamp_column}' not found in dataset")
             
-            # Remove missing values
-            reviews = df[self.review_column].dropna()
-            logger.info(f"Usable documents: {len(reviews)}")
+            # Report missing values in review column
+            missing_reviews = df[self.review_column].isna().sum()
+            logger.info(f"Missing values in review column: {missing_reviews} ({missing_reviews/len(df):.2%})")
             
-            # Sample data if requested
-            if self.sample_size is not None and self.sample_size < len(reviews):
-                logger.info(f"Sampling {self.sample_size} documents")
-                reviews = reviews.sample(self.sample_size, random_state=42)
+            # Drop rows where review or timestamp is missing
+            df_cleaned = df.dropna(subset=[self.review_column, self.timestamp_column])
+            logger.info(f"Documents after removing missing values: {len(df_cleaned)}")
             
             # Basic text cleaning
-            reviews = reviews.apply(lambda x: str(x).strip())
+            df_cleaned[self.review_column] = df_cleaned[self.review_column].apply(lambda x: str(x).strip())
             
             # Filter out empty strings after cleaning
-            reviews = reviews[reviews.str.len() > 0]
-            logger.info(f"Final document count: {len(reviews)}")
+            df_cleaned = df_cleaned[df_cleaned[self.review_column].str.len() > 0]
+            logger.info(f"Final document count after cleaning: {len(df_cleaned)}")
             
-            return reviews
+            # Sample data if requested
+            if self.sample_size is not None and self.sample_size < len(df_cleaned):
+                logger.info(f"Sampling {self.sample_size} documents")
+                df_cleaned = df_cleaned.sample(self.sample_size, random_state=42)
+            
+            # Select only the required columns
+            result_df = df_cleaned[[self.review_column, self.timestamp_column]]
+            result_df.columns = ["review", "yearMonth"]  # Standardize column names
+            
+            logger.info(f"Returning DataFrame with {len(result_df)} rows and columns: {list(result_df.columns)}")
+            return result_df
             
         except FileNotFoundError:
             logger.error(f"File not found: {self.input_filepath}")
@@ -100,7 +113,6 @@ class DataLoader:
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}")
             raise
-
 
 
 class BERTopicConfigurator:
@@ -128,6 +140,12 @@ class BERTopicConfigurator:
         self.umap_model = UMAP(**self.config["umap"])
         logger.info(f"Initialized UMAP with parameters: {self.config['umap']}")
         
+        # Initialize UMAP for dimensionality reduction for visualization in 2D
+        umap_2d_params = self.config["umap"]
+        umap_2d_params["n_components"] = 2
+        self.umap_model_2d = UMAP(**umap_2d_params)
+        logger.info(f"Initialized UMAP with parameters: {umap_2d_params}")
+
         # Initialize HDBSCAN for clustering
         self.hdbscan_model = HDBSCAN(**self.config["hdbscan"])
         logger.info(f"Initialized HDBSCAN with parameters: {self.config['hdbscan']}")
@@ -153,10 +171,11 @@ class BERTopicConfigurator:
         logger.info("BERTopic model configuration complete")
 
 
+
 class TopicModeler:
     """Train and manage the topic model."""
     
-    def __init__(self, topic_model: BERTopic):
+    def __init__(self, topic_model):
         """
         Initialize the topic modeler.
         
@@ -167,28 +186,42 @@ class TopicModeler:
         self.topics = None
         self.probs = None
         self.doc_info = None
+        self.embeddings = None
+        self.reduced_embeddings = None
         
-    def fit(self, documents: List[str]) -> Tuple[List[int], np.ndarray]:
+    def fit(self, documents: List[str]) -> Tuple[List[int], np.ndarray, np.ndarray, np.ndarray]:
         """
-        Train the model on documents and return topics and probabilities.
+        Train the model on documents and return topics, probabilities, embeddings, and reduced embeddings.
         
         Args:
             documents: List of document texts
             
         Returns:
-            Tuple containing topic assignments and topic probabilities
+            Tuple containing:
+                - Topic assignments (List[int])
+                - Topic probabilities (np.ndarray)
+                - Document embeddings (np.ndarray)
+                - Reduced embeddings for visualization (np.ndarray)
         """
         logger.info("Training BERTopic model")
         
+        if not documents or not isinstance(documents, list):
+            raise ValueError("Documents must be a non-empty list of strings.")
+        
         try:
-            self.topics, self.probs = self.topic_model.fit_transform(documents)
+            # Generate embeddings
+            self.embeddings = self.topic_model.embedding_model.encode(documents)
+            
+            # Fit the model and get topics and probabilities
+            self.topics, self.probs = self.topic_model.fit_transform(documents=documents, embeddings=self.embeddings)
+            
+            # Log information about the topics
             info = self.topic_model.get_topic_info()
             logger.info(f"Number of topics identified: {len(info)}")
             logger.info(f"Distribution: {info['Count'].value_counts().to_dict()}")
-            #check
             logger.info(f"Topic assignments: {self.topics[:3]}")
             logger.info(f"Topic probabilities: {self.probs[:3]}")
-
+            
             # Create document info dataframe
             self.doc_info = pd.DataFrame({
                 'Document': documents,
@@ -196,18 +229,31 @@ class TopicModeler:
                 'Probability': self.probs
             })
             
-            return self.topics, self.probs
+            # Reduce embeddings to 2D for visualization
+            if hasattr(self.topic_model, "umap_model"):
+                self.reduced_embeddings = self.topic_model.umap_model.transform(self.embeddings)
+            else:
+                raise AttributeError("The BERTopic model does not have a UMAP model for dimensionality reduction.")
+            
+            # return self.topics, self.probs, self.embeddings, self.reduced_embeddings
+        
         except Exception as e:
-            logger.error(f"Error during model training: {str(e)}")
+            logger.error(f"Error during model training: {str(e)}\n{traceback.format_exc()}")
             raise
-    
-    def save(self, output_dir: str):
+
+    def save(self, output_dir: str) -> str:
         """
         Save the BERTopic model and related outputs.
         
         Args:
             output_dir: Directory to save model artifacts
+            
+        Returns:
+            Path to the saved model directory
         """
+        if not os.path.exists(output_dir):
+            raise FileNotFoundError(f"The output directory '{output_dir}' does not exist.")
+        
         # Create timestamped directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_path = os.path.join(output_dir, f"bertopic_model_{timestamp}")
@@ -217,7 +263,13 @@ class TopicModeler:
         
         try:
             # Save the BERTopic model
-            self.topic_model.save(os.path.join(save_path, "model"), serialization="safetensors")
+            embedding_model = self.topic_model.embedding_model
+            self.topic_model.save(
+                os.path.join(save_path, "model"), 
+                serialization="safetensors", 
+                save_ctfidf=True, 
+                save_embedding_model=embedding_model
+            )
             
             # Save document info
             if self.doc_info is not None:
@@ -232,14 +284,19 @@ class TopicModeler:
             for topic in topic_info['Topic'].unique():
                 if topic != -1:  # Skip outlier topic
                     terms = self.topic_model.get_topic(topic)
-                    topic_terms[topic] = terms
+                    topic_terms[topic] = [term[0] for term in terms]  # Extract only the terms
             
             pd.DataFrame(topic_terms).to_csv(os.path.join(save_path, "topic_terms.csv"))
             
+            # Save reduced embeddings
+            if self.reduced_embeddings is not None:
+                np.save(os.path.join(save_path, "reduced_embeddings.npy"), self.reduced_embeddings)
+            
             logger.info(f"Model and artifacts saved successfully to {save_path}")
             return save_path
+        
         except Exception as e:
-            logger.error(f"Error saving model: {str(e)}")
+            logger.error(f"Error saving model: {str(e)}\n{traceback.format_exc()}")
             raise
 
 
@@ -256,9 +313,8 @@ class Evaluator:
         """
         self.topic_model = topic_model
         self.config = config
-        self.sample_size = config.get("sample_size", 1000)
         self.coherence_metrics = config.get("coherence_metrics", ["c_v"])
-        
+
     def calculate_coherence(self, documents: List[str]) -> Dict[str, float]:
         """
         Calculate coherence scores for the topic model using Gensim's CoherenceModel.
@@ -272,17 +328,10 @@ class Evaluator:
         logger.info("Calculating coherence scores using Gensim")
         scores = {}
         
-        # Sample documents if necessary for performance
-        if self.sample_size and len(documents) > self.sample_size:
-            logger.info(f"Sampling {self.sample_size} documents for coherence calculation")
-            sampled_docs = np.random.choice(documents, self.sample_size, replace=False).tolist()
-        else:
-            sampled_docs = documents
-        
         try:
             # Tokenize documents for Gensim
             logger.info("Tokenizing documents for coherence calculation")
-            tokenized_texts = [doc.split() for doc in sampled_docs if doc]
+            tokenized_texts = [doc.split() for doc in documents if doc]
             
             # Extract topic words from BERTopic model
             logger.info("Extracting topic words from model")
@@ -358,6 +407,16 @@ class Evaluator:
             logger.error(f"Error calculating topic diversity: {str(e)}")
             return 0.0
 
+    def calculate_metrics(self, documents: List[str]) -> Dict[str, float]:
+
+        coherence_scores = self.calculate_coherence(documents)
+        topic_diversity = self.calculate_topic_diversity()
+
+        return {
+            "coherence_scores": coherence_scores,
+            "topic_diversity": topic_diversity
+        }
+
 
 def visualize_topics_2d(topics, reduced_embeddings, docs, width=1000, height=700):
     """
@@ -393,7 +452,7 @@ def visualize_topics_2d(topics, reduced_embeddings, docs, width=1000, height=700
         color='Topic',
         hover_data={'Review': True, 'Topic': True, 'x': False, 'y': False},
         title="Topic Visualization in 2D Space",
-        labels={'x': 'Dimension 1', 'y': 'Dimension 2'},
+        labels={'x': 'Component 1', 'y': 'Component 2'},
         width=width,
         height=height
     )
@@ -416,7 +475,7 @@ def visualize_topics_2d(topics, reduced_embeddings, docs, width=1000, height=700
     return fig
 
 
-def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, coherence_scores, 
+def build_dashboard(topic_model, topics, probs, docs, timestamps, reduced_embeddings, coherence_scores, 
                     topic_diversity, port: int):
     """
     Build an interactive Dash dashboard to visualize BERTopic results.
@@ -426,6 +485,7 @@ def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, cohere
         topics: List of topic assignments
         probs: Probabilities associated with topic assignments
         docs: Original document texts
+        timestamps: Timestamps associated with documents
         reduced_embeddings: 2D reduced embeddings for visualization
         coherence_scores: Dictionary of coherence scores
         topic_diversity: Topic diversity score
@@ -456,12 +516,15 @@ def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, cohere
 
             sample_indices = indices[:5]
             topic_docs[topic_id] = [(docs[i], probs[i]) for i in sample_indices]
- 
+    
+    # Get topic overtime
+    topics_over_time = topic_model.topics_over_time(docs, timestamps=timestamps)
+
     # Define dashboard layout
     app.layout = html.Div([
         # Header
         html.Div([
-            html.H1("BERTopic Dashboard", className="text-2xl font-bold mb-2"),
+            html.H1("Review Topics Dashboard", className="text-2xl font-bold mb-2"),
             html.P("Interactive visualization of topic modeling results", className="text-gray-600"),
         ], className="p-4 bg-gray-100 border-b"),
         
@@ -536,26 +599,6 @@ def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, cohere
                             )
                         ], className="p-4"),
 
-                        dcc.Tab(label="Document Map", children=[
-                            dcc.Graph(
-                                id="documents-map",
-                                figure=visualize_topics_2d(
-                                    topics=topics,
-                                    reduced_embeddings=reduced_embeddings,
-                                    docs=docs,
-                                    width=800,
-                                    height=800
-                                ),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
-                        dcc.Tab(label="Topic Hierarchy", children=[
-                            dcc.Graph(
-                                id="hierarchy-graph",
-                                figure=topic_model.visualize_hierarchy(),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
                         dcc.Tab(label="Topic Terms", children=[
                             dcc.Graph(
                                 id="barchart-graph",
@@ -563,6 +606,43 @@ def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, cohere
                                 style={"height": "600px"}
                             )
                         ], className="p-4"),
+
+                        dcc.Tab(label="Similarity Matrix", children=[
+                            dcc.Graph(
+                                id="similarity-matrix",
+                                figure=topic_model.visualize_heatmap(),
+                                style={"height": "600px"}
+                            )
+                        ], className="p-4"),
+
+                        dcc.Tab(label="Document Map", children=[
+                            dcc.Graph(
+                                id="documents-map",
+                                figure=visualize_topics_2d(
+                                    topics=topics,
+                                    reduced_embeddings=reduced_embeddings,
+                                    docs=docs
+                                ),
+                                style={"height": "600px"}
+                            )
+                        ], className="p-4"),
+
+                        dcc.Tab(label="Topic Over Time", children=[
+                            dcc.Graph(
+                                id="topic-over-time",
+                                figure=topic_model.visualize_topics_over_time(topics_over_time, topics=[-1, 0, 1, 2, 3, 4]),
+                                style={"height": "600px"}
+                            )
+                        ], className="p-4"),
+
+                        dcc.Tab(label="Topic Hierarchy", children=[
+                            dcc.Graph(
+                                id="hierarchy-graph",
+                                figure=topic_model.visualize_hierarchy(),
+                                style={"height": "600px"}
+                            )
+                        ], className="p-4"),
+
                         dcc.Tab(label="Topic Distribution", children=[
                             dcc.Graph(
                                 id="distribution-graph",
@@ -572,7 +652,6 @@ def build_dashboard(topic_model, topics, probs, docs, reduced_embeddings, cohere
                         ], className="p-4"),
                     ], className="mb-4"),
                 ], className="mb-6 bg-white border rounded p-4"),
-                
                 
 
                 # Topic explorer
@@ -672,7 +751,9 @@ def main(config_path: str):
         
         # Load data
         data_loader = DataLoader(config["data"])
-        reviews = data_loader.load_reviews()
+        data = data_loader.load_reviews()
+        reviews = data.review
+        timestamp = data.yearMonth
         
         if len(reviews) == 0:
             logger.error("No usable data available. Stopping pipeline.")
@@ -681,33 +762,28 @@ def main(config_path: str):
         # Configure and train model
         configurer = BERTopicConfigurator(config["model"])
         modeler = TopicModeler(configurer.topic_model)
-        topics, probs = modeler.fit(reviews.tolist())
+        modeler.fit(reviews.tolist())
         
         # Evaluate model
         evaluator = Evaluator(modeler.topic_model, config["evaluation"])
-        coherence_scores = evaluator.calculate_coherence(reviews.tolist())
-        topic_diversity = evaluator.calculate_topic_diversity()
+        metric_scores = evaluator.calculate_metrics(reviews.tolist())
+        coherence_scores = metric_scores["coherence_scores"]
+        topic_diversity = metric_scores["topic_diversity"]
         
         # Save model if configured
         if config["output"]["save_model"]:
             model_path = modeler.save(output_dir)
             logger.info(f"Model saved to {model_path}")
         
-        # Prepare visualization data
-        logger.info("Computing embeddings for visualization")
-        embeddings = configurer.embedding_model.encode(reviews.tolist(), show_progress_bar=True)
-        
-        # Reduce dimensionality to 2D for visualization
-        viz_umap = UMAP(n_components=2, min_dist=0.0, metric='cosine')
-        reduced_embeddings = viz_umap.fit_transform(embeddings)
         
         # Create and run dashboard
         app = build_dashboard(
             topic_model=modeler.topic_model,
-            topics=topics,
-            probs=probs,
+            topics=modeler.topics,
+            probs=modeler.probs,
             docs=reviews.tolist(),
-            reduced_embeddings=reduced_embeddings,
+            timestamps=timestamp.tolist(),
+            reduced_embeddings=modeler.reduced_embeddings,
             coherence_scores=coherence_scores,
             topic_diversity=topic_diversity,
             port=config["output"]["dashboard_port"]
