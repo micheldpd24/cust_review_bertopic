@@ -11,6 +11,7 @@ model:
   language: "french"
   min_topic_size: 20
   nr_topics: "auto"
+  top_n_words: 13
   umap:
     n_neighbors: 15
     n_components: 5
