@@ -17,6 +17,7 @@ model:
     n_components: 3
     min_dist: 0.0
     metric: "cosine"
+    random_state: 42
   hdbscan:
     min_cluster_size: 15
     metric: "euclidean"
@@ -35,4 +36,8 @@ evaluation:
 output:
   save_model: true   # Whether to save the trained model
   output_dir: "data/results"  # Directory to save model outputs
-  dashboard_port: 8050  # Port for the dashboard  
+
+dasboard:
+  port: 8050  # Port for the dashboard  
+  host: "0.0.0.0"
+  debug: True
