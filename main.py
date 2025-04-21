@@ -4,6 +4,7 @@ import logging
 import zipfile
 import numpy as np
 import pandas as pd
+import traceback
 from typing import Dict, List, Tuple, Optional, Union
 from datetime import datetime
 import argparse
@@ -14,19 +15,16 @@ from bertopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
 from umap import UMAP
 from hdbscan import HDBSCAN
-
-# Gensim imports for coherence calculation
 import gensim
 import gensim.corpora as corpora
 from gensim.models.coherencemodel import CoherenceModel
 
-# Dashboard imports
+# Dash imports
 import dash
 from dash import dcc, html, dash_table
 import plotly.express as px
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
-
 
 # Configure logging
 logging.basicConfig(
@@ -39,37 +37,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-
 class DataLoader:
-    """Load and preprocess the data for topic modeling."""
-    
     def __init__(self, config: Dict):
-        """
-        Initialize the DataLoader.
-        
-        Args:
-            config: Dictionary containing data configuration parameters
-        """
         self.input_filepath = config["input_filepath"]
         self.review_column = config.get("review_column", "review")
         self.timestamp_column = config.get("timestamp_column", "yearMonth")
         self.sample_size = config.get("sample_size", None)
-        
+    
     def load_reviews(self) -> pd.DataFrame:
-        """
-        Load and preprocess reviews from a CSV file.
-        
-        Returns:
-            pd.DataFrame: DataFrame containing 'review' and 'yearMonth' columns.
-        """
         logger.info(f"Loading data from {self.input_filepath}")
         try:
-            # Load the dataset
             df = pd.read_csv(self.input_filepath)
             logger.info(f"Total documents loaded: {len(df)}")
             
-            # Check if required columns exist
             if self.review_column not in df.columns:
                 available_cols = ", ".join(df.columns)
                 logger.error(f"Review column '{self.review_column}' not found. Available columns: {available_cols}")
@@ -80,33 +60,26 @@ class DataLoader:
                 logger.error(f"Timestamp column '{self.timestamp_column}' not found. Available columns: {available_cols}")
                 raise ValueError(f"Timestamp column '{self.timestamp_column}' not found in dataset")
             
-            # Report missing values in review column
             missing_reviews = df[self.review_column].isna().sum()
             logger.info(f"Missing values in review column: {missing_reviews} ({missing_reviews/len(df):.2%})")
             
-            # Drop rows where review or timestamp is missing
             df_cleaned = df.dropna(subset=[self.review_column, self.timestamp_column])
             logger.info(f"Documents after removing missing values: {len(df_cleaned)}")
             
-            # Basic text cleaning
             df_cleaned[self.review_column] = df_cleaned[self.review_column].apply(lambda x: str(x).strip())
-            
-            # Filter out empty strings after cleaning
             df_cleaned = df_cleaned[df_cleaned[self.review_column].str.len() > 0]
             logger.info(f"Final document count after cleaning: {len(df_cleaned)}")
             
-            # Sample data if requested
             if self.sample_size is not None and self.sample_size < len(df_cleaned):
                 logger.info(f"Sampling {self.sample_size} documents")
                 df_cleaned = df_cleaned.sample(self.sample_size, random_state=42)
             
-            # Select only the required columns
             result_df = df_cleaned[[self.review_column, self.timestamp_column]]
-            result_df.columns = ["review", "yearMonth"]  # Standardize column names
-            
+            result_df.columns = ["review", "timestamp"] # +++
             logger.info(f"Returning DataFrame with {len(result_df)} rows and columns: {list(result_df.columns)}")
-            return result_df
             
+            return result_df
+        
         except FileNotFoundError:
             logger.error(f"File not found: {self.input_filepath}")
             raise
@@ -114,21 +87,11 @@ class DataLoader:
             logger.error(f"Error loading data: {str(e)}")
             raise
 
-
 class BERTopicConfigurator:
-    """Configure the BERTopic model with the provided parameters."""
-    
     def __init__(self, config: Dict):
-        """
-        Initialize the BERTopic model configuration.
-        
-        Args:
-            config: Dictionary containing model configuration parameters
-        """
         logger.info("Configuring BERTopic model")
         self.config = config
         
-        # Initialize embedding model
         try:
             self.embedding_model = SentenceTransformer(self.config["transformer_name"])
             logger.info(f"Initialized embedding model: {self.config['transformer_name']}")
@@ -136,28 +99,23 @@ class BERTopicConfigurator:
             logger.error(f"Error initializing embedding model: {str(e)}")
             raise
         
-        # Initialize UMAP for dimensionality reduction
         self.umap_model = UMAP(**self.config["umap"])
         logger.info(f"Initialized UMAP with parameters: {self.config['umap']}")
         
-        # Initialize UMAP for dimensionality reduction for visualization in 2D
-        umap_2d_params = self.config["umap"]
+        umap_2d_params = self.config["umap"].copy()
         umap_2d_params["n_components"] = 2
         self.umap_model_2d = UMAP(**umap_2d_params)
         logger.info(f"Initialized UMAP with parameters: {umap_2d_params}")
-
-        # Initialize HDBSCAN for clustering
+        
         self.hdbscan_model = HDBSCAN(**self.config["hdbscan"])
         logger.info(f"Initialized HDBSCAN with parameters: {self.config['hdbscan']}")
         
-        # Initialize CountVectorizer for feature extraction
         self.vectorizer_model = CountVectorizer(
-            stop_words=None,  # self.config["vectorizer"]["stop_words"],
+            stop_words=None,
             ngram_range=tuple(self.config["vectorizer"]["ngram_range"])
         )
         logger.info(f"Initialized CountVectorizer with parameters: {self.config['vectorizer']}")
         
-        # Initialize BERTopic model
         self.topic_model = BERTopic(
             min_topic_size=self.config["min_topic_size"],
             embedding_model=self.embedding_model,
@@ -170,189 +128,118 @@ class BERTopicConfigurator:
         )
         logger.info("BERTopic model configuration complete")
 
-
-
 class TopicModeler:
-    """Train and manage the topic model."""
-    
     def __init__(self, topic_model):
-        """
-        Initialize the topic modeler.
-        
-        Args:
-            topic_model: Configured BERTopic model
-        """
         self.topic_model = topic_model
         self.topics = None
         self.probs = None
         self.doc_info = None
         self.embeddings = None
         self.reduced_embeddings = None
-        
+    
     def fit(self, documents: List[str]) -> Tuple[List[int], np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Train the model on documents and return topics, probabilities, embeddings, and reduced embeddings.
-        
-        Args:
-            documents: List of document texts
-            
-        Returns:
-            Tuple containing:
-                - Topic assignments (List[int])
-                - Topic probabilities (np.ndarray)
-                - Document embeddings (np.ndarray)
-                - Reduced embeddings for visualization (np.ndarray)
-        """
         logger.info("Training BERTopic model")
-        
         if not documents or not isinstance(documents, list):
             raise ValueError("Documents must be a non-empty list of strings.")
         
         try:
-            # Generate embeddings
             self.embeddings = self.topic_model.embedding_model.encode(documents)
+            self.topics, self.probs = self.topic_model.fit_transform(
+                documents=documents, 
+                embeddings=self.embeddings
+            )
             
-            # Fit the model and get topics and probabilities
-            self.topics, self.probs = self.topic_model.fit_transform(documents=documents, embeddings=self.embeddings)
-            
-            # Log information about the topics
             info = self.topic_model.get_topic_info()
             logger.info(f"Number of topics identified: {len(info)}")
             logger.info(f"Distribution: {info['Count'].value_counts().to_dict()}")
             logger.info(f"Topic assignments: {self.topics[:3]}")
             logger.info(f"Topic probabilities: {self.probs[:3]}")
             
-            # Create document info dataframe
             self.doc_info = pd.DataFrame({
                 'Document': documents,
                 'Topic': self.topics,
                 'Probability': self.probs
             })
             
-            # Reduce embeddings to 2D for visualization
             if hasattr(self.topic_model, "umap_model"):
                 self.reduced_embeddings = self.topic_model.umap_model.transform(self.embeddings)
             else:
                 raise AttributeError("The BERTopic model does not have a UMAP model for dimensionality reduction.")
+                
+            return self.topics, self.probs, self.embeddings, self.reduced_embeddings
             
-            # return self.topics, self.probs, self.embeddings, self.reduced_embeddings
-        
         except Exception as e:
             logger.error(f"Error during model training: {str(e)}\n{traceback.format_exc()}")
             raise
-
+    
     def save(self, output_dir: str) -> str:
-        """
-        Save the BERTopic model and related outputs.
-        
-        Args:
-            output_dir: Directory to save model artifacts
-            
-        Returns:
-            Path to the saved model directory
-        """
         if not os.path.exists(output_dir):
             raise FileNotFoundError(f"The output directory '{output_dir}' does not exist.")
         
-        # Create timestamped directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_path = os.path.join(output_dir, f"bertopic_model_{timestamp}")
         os.makedirs(save_path, exist_ok=True)
-        
         logger.info(f"Saving model to {save_path}")
         
         try:
-            # Save the BERTopic model
             embedding_model = self.topic_model.embedding_model
             self.topic_model.save(
-                os.path.join(save_path, "model"), 
-                serialization="safetensors", 
-                save_ctfidf=True, 
+                os.path.join(save_path, "model"),
+                serialization="safetensors",
+                save_ctfidf=True,
                 save_embedding_model=embedding_model
             )
             
-            # Save document info
             if self.doc_info is not None:
                 self.doc_info.to_csv(os.path.join(save_path, "document_topics.csv"), index=False)
             
-            # Save topic info
             topic_info = self.topic_model.get_topic_info()
             topic_info.to_csv(os.path.join(save_path, "topic_info.csv"), index=False)
             
-            # Save top terms per topic
             topic_terms = {}
             for topic in topic_info['Topic'].unique():
-                if topic != -1:  # Skip outlier topic
+                if topic != -1:
                     terms = self.topic_model.get_topic(topic)
-                    topic_terms[topic] = [term[0] for term in terms]  # Extract only the terms
-            
+                    topic_terms[topic] = [term[0] for term in terms]
             pd.DataFrame(topic_terms).to_csv(os.path.join(save_path, "topic_terms.csv"))
             
-            # Save reduced embeddings
             if self.reduced_embeddings is not None:
                 np.save(os.path.join(save_path, "reduced_embeddings.npy"), self.reduced_embeddings)
             
             logger.info(f"Model and artifacts saved successfully to {save_path}")
             return save_path
-        
+            
         except Exception as e:
             logger.error(f"Error saving model: {str(e)}\n{traceback.format_exc()}")
             raise
 
-
 class Evaluator:
-    """Evaluate the topic model using various metrics."""
-    
     def __init__(self, topic_model: BERTopic, config: Dict):
-        """
-        Initialize the evaluator.
-        
-        Args:
-            topic_model: Trained BERTopic model
-            config: Dictionary containing evaluation parameters
-        """
         self.topic_model = topic_model
         self.config = config
         self.coherence_metrics = config.get("coherence_metrics", ["c_v"])
-
+    
     def calculate_coherence(self, documents: List[str]) -> Dict[str, float]:
-        """
-        Calculate coherence scores for the topic model using Gensim's CoherenceModel.
-        
-        Args:
-            documents: List of document texts
-            
-        Returns:
-            Dictionary mapping coherence metrics to their scores
-        """
         logger.info("Calculating coherence scores using Gensim")
         scores = {}
         
         try:
-            # Tokenize documents for Gensim
             logger.info("Tokenizing documents for coherence calculation")
             tokenized_texts = [doc.split() for doc in documents if doc]
             
-            # Extract topic words from BERTopic model
             logger.info("Extracting topic words from model")
             topics_dict = self.topic_model.get_topics()
-            
-            # Skip outlier topic (-1) if present
             if -1 in topics_dict:
                 del topics_dict[-1]
                 
-            # Format topics for Gensim coherence model
             gensim_topics = []
             for topic_id in sorted(topics_dict.keys()):
-                # Extract words without weights
                 topic_words = [word for word, _ in topics_dict[topic_id]]
                 gensim_topics.append(topic_words)
             
-            # Create Gensim dictionary
             logger.info("Creating Gensim dictionary")
             dictionary = corpora.Dictionary(tokenized_texts)
             
-            # Calculate coherence for each metric
             for metric in self.coherence_metrics:
                 try:
                     logger.info(f"Calculating {metric} coherence")
@@ -371,449 +258,468 @@ class Evaluator:
             
             logger.info(f"Coherence scores: {scores}")
             return scores
+            
         except Exception as e:
             logger.error(f"Error in coherence calculation pipeline: {str(e)}")
             return scores
     
     def calculate_topic_diversity(self) -> float:
-        """
-        Calculate topic diversity score.
-        
-        Returns:
-            Topic diversity score (0-1)
-        """
         try:
-            # Get all topics except for outliers
             topics = self.topic_model.get_topics()
             if -1 in topics:
                 del topics[-1]
-            
+                
             if not topics:
                 logger.warning("No topics found for diversity calculation")
                 return 0.0
-            
-            # Get unique words across all topics
+                
             unique_words = set()
             for topic in topics.values():
                 unique_words.update([word for word, _ in topic])
-            
-            # Calculate diversity as ratio of unique words to total words
+                
             total_words = sum(len(topic) for topic in topics.values())
             diversity = len(unique_words) / total_words if total_words > 0 else 0
             
             logger.info(f"Topic diversity: {diversity:.4f}")
             return diversity
+            
         except Exception as e:
             logger.error(f"Error calculating topic diversity: {str(e)}")
             return 0.0
-
+    
     def calculate_metrics(self, documents: List[str]) -> Dict[str, float]:
-
         coherence_scores = self.calculate_coherence(documents)
         topic_diversity = self.calculate_topic_diversity()
-
+        
         return {
             "coherence_scores": coherence_scores,
             "topic_diversity": topic_diversity
         }
 
-
-def visualize_topics_2d(topics, reduced_embeddings, docs, width=1000, height=700):
-    """
-    Visualize topics in 2D using Plotly.
-    
-    Args:
-        topics: List of topic assignments
-        reduced_embeddings: 2D embeddings for visualization
-        docs: List of document texts
-        width: Plot width
-        height: Plot height
-        
-    Returns:
-        Plotly Figure object
-    """
+# Visualization utilities
+def visualize_topics_2d(topics, reduced_embeddings, docs, width=1200, height=900):
+    """Create a 2D visualization of topic distribution"""
     if reduced_embeddings.shape[1] < 2:
         logger.error("Reduced embeddings must have at least two dimensions")
         raise ValueError("Reduced embeddings must have at least two dimensions")
     
-    # Create dataframe for plotting
     df = pd.DataFrame({
         'x': reduced_embeddings[:, 0],
         'y': reduced_embeddings[:, 1],
         'Topic': [f"Topic {t}" if t != -1 else "Outliers (-1)" for t in topics],
-        'Review': [doc[:100] + "..." if len(doc) > 100 else doc for doc in docs]  # Truncate long texts
+        'Review': [doc[:100] + "..." if len(doc) > 100 else doc for doc in docs]
     })
     
-    # Create scatter plot
     fig = px.scatter(
         df,
         x='x',
         y='y',
         color='Topic',
-        hover_data={'Review': True, 'Topic': True, 'x': False, 'y': False},
+        hover_data={
+            'Review': True, 
+            'Topic': True, 
+            'x': False, 
+            'y': False
+        },
         title="Topic Visualization in 2D Space",
         labels={'x': 'Component 1', 'y': 'Component 2'},
         width=width,
         height=height
     )
     
-    # Customize appearance
-    fig.update_traces(marker=dict(size=8, opacity=0.7))
+    fig.update_traces(marker=dict(size=6, opacity=0.7))
     fig.update_layout(
         legend_title_text='Topics',
         showlegend=True,
         title_x=0.5,
         hovermode='closest',
         legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
+            yanchor="middle",
+            y=0.50,
+            xanchor="right",
+            x=1.15
         )
     )
     
     return fig
 
-
-def build_dashboard(topic_model, topics, probs, docs, timestamps, reduced_embeddings, coherence_scores, 
-                    topic_diversity, port: int):
-    """
-    Build an interactive Dash dashboard to visualize BERTopic results.
+# Dashboard components
+class DashboardComponents:
+    @staticmethod
+    def create_model_performance_section(coherence_scores, topic_diversity, topic_info):
+        """Create the model performance section with coherence scores and topic diversity"""
+        return html.Div([
+            html.H2("Model Performance", className="text-xl font-bold mb-3"),
+            html.Div([
+                # Coherence Scores Table
+                html.Div([
+                    html.H3("Coherence Scores", className="text-lg font-semibold mb-2"),
+                    dash_table.DataTable(
+                        id="coherence-table",
+                        columns=[
+                            {"name": "Metric", "id": "Metric"},
+                            {"name": "Score", "id": "Score"}
+                        ],
+                        data=[
+                            {"Metric": metric, "Score": f"{score:.4f}" if score is not None else "N/A"} 
+                            for metric, score in coherence_scores.items()
+                        ],
+                        style_table={"overflowX": "auto"},
+                        style_cell={"textAlign": "left", "padding": "10px"},
+                        style_header={"backgroundColor": "rgb(230, 230, 230)", "fontWeight": "bold"}
+                    )
+                ], className="p-4 border rounded bg-white mb-4"),
+                
+                # Topic Diversity Card
+                html.Div([
+                    html.H3("Topic Diversity", className="text-lg font-semibold mb-2"),
+                    html.Div([
+                        html.Span(f"{topic_diversity:.4f}", className="text-2xl font-bold"),
+                        html.Span(" / 1.0", className="text-gray-500")
+                    ], className="flex items-center"),
+                    html.P("Higher scores indicate more diverse topics", 
+                           className="text-sm text-gray-600 mt-1")
+                ], className="p-4 border rounded bg-white mb-4"),
+                
+                # Topic Summary Table
+                html.Div([
+                    html.H3("Topic Summary", className="text-lg font-semibold mb-2"),
+                    dash_table.DataTable(
+                        id="topic-summary",
+                        columns=[
+                            {"name": "Topic", "id": "Topic"},
+                            {"name": "Count", "id": "Count"},
+                            {"name": "Name", "id": "Name"},
+                        ],
+                        data=topic_info[["Topic", "Count", "Name"]].to_dict("records"),
+                        style_table={"overflowX": "auto"},
+                        style_cell={"textAlign": "left", "padding": "10px"},
+                        style_header={"backgroundColor": "rgb(230, 230, 230)", "fontWeight": "bold"},
+                        page_size=10
+                    )
+                ], className="p-4 border rounded bg-white"),
+            ])
+        ], className="w-full lg:w-1/3 p-4")
     
-    Args:
-        topic_model: Trained BERTopic model
-        topics: List of topic assignments
-        probs: Probabilities associated with topic assignments
-        docs: Original document texts
-        timestamps: Timestamps associated with documents
-        reduced_embeddings: 2D reduced embeddings for visualization
-        coherence_scores: Dictionary of coherence scores
-        topic_diversity: Topic diversity score
-        port: Port number for the Dash server
+    @staticmethod
+    def create_topic_visualizations(topic_model, topics, reduced_embeddings, docs, topics_over_time):
+        """Create the topic visualizations section with various visualization options"""
+        return html.Div([
+            html.H2("Topic Visualizations", className="text-xl font-bold mb-3"),
+            dcc.Tabs([
+                # Topic Overview Tab
+                dcc.Tab(
+                    label="Topic Overview", 
+                    children=[
+                        dcc.Graph(
+                            id="topics-overview",
+                            figure=topic_model.visualize_topics(),
+                            style={"height": "600px"}
+                        )
+                    ], 
+                    className="p-4"
+                ),
+                
+                # Topic Terms Tab
+                dcc.Tab(
+                    label="Topic Terms", 
+                    children=[
+                        dcc.Graph(
+                            id="barchart-graph",
+                            figure=topic_model.visualize_barchart(top_n_topics=10),
+                            style={"height": "600px"}
+                        )
+                    ], 
+                    className="p-4"
+                ),
+                
+                # Similarity Matrix Tab
+                dcc.Tab(
+                    label="Topic Similarity", 
+                    children=[
+                        dcc.Graph(
+                            id="similarity-matrix",
+                            figure=topic_model.visualize_heatmap(),
+                            style={"height": "600px"}
+                        )
+                    ], 
+                    className="p-4"
+                ),
+                
+                # Document Map Tab
+                dcc.Tab(
+                    label="Document Map", 
+                    children=[
+                        dcc.Graph(
+                            id="documents-map",
+                            figure=visualize_topics_2d(
+                                topics=topics,
+                                reduced_embeddings=reduced_embeddings,
+                                docs=docs
+                            ),
+                            style={"height": "600px"}
+                        )
+                    ], 
+                    className="p-4"
+                ),
+                
+                # Topics Over Time Tab
+                dcc.Tab(
+                    label="Topic Over Time", 
+                    children=[
+                        dcc.Graph(
+                            id="topic-over-time",
+                            figure=topic_model.visualize_topics_over_time(
+                                topics_over_time, 
+                                top_n_topics=10
+                            ),
+                            style={"height": "600px"}
+                        )
+                    ], 
+                    className="p-4"
+                ),
+            ])
+        ], className="w-full lg:w-2/3 p-4")
+    
+
+    @staticmethod
+    def create_topic_details_section(topic_docs, topic_model):
+        """Create the topic details section with dropdown for topic selection"""
+        if not topic_docs:
+            return html.Div()
         
-    Returns:
-        Dash application instance
-    """
-    logger.info("Creating dashboard")
-    app = dash.Dash(
-        __name__, 
-        external_stylesheets=[
-            "https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css"
+        # Create dropdown options from available topics
+        topic_options = [
+            {'label': f"Topic {topic_id}", 'value': topic_id}
+            for topic_id in topic_docs.keys()
         ]
-    )
-    
-    # Topic information
-    topic_info = topic_model.get_topic_info()
-    
-    # Get some sample documents for each topic
-    topic_docs = {}
-    for topic_id in set(topics):
-        if topic_id == -1:  # Skip outliers for document samples
-            continue
-        indices = [i for i, t in enumerate(topics) if t == topic_id]
-        if indices:
-            # Get up to 5 sample documents for each topic
-
-            sample_indices = indices[:5]
-            topic_docs[topic_id] = [(docs[i], probs[i]) for i in sample_indices]
-    
-    # Get topic overtime
-    topics_over_time = topic_model.topics_over_time(docs, timestamps=timestamps)
-
-    # Define dashboard layout
-    app.layout = html.Div([
-        # Header
-        html.Div([
-            html.H1("Review Topics Dashboard", className="text-2xl font-bold mb-2"),
-            html.P("Interactive visualization of topic modeling results", className="text-gray-600"),
-        ], className="p-4 bg-gray-100 border-b"),
         
-        # Main content
-        html.Div([
-            # Metrics and Overview
-            html.Div([
-                html.H2("Model Performance", className="text-xl font-bold mb-3"),
-                html.Div([
-                    # Coherence scores
-                    html.Div([
-                        html.H3("Coherence Scores", className="text-lg font-semibold mb-2"),
-                        dash_table.DataTable(
-                            id="coherence-table",
-                            columns=[
-                                {"name": "Metric", "id": "Metric"},
-                                {"name": "Score", "id": "Score"}
-                            ],
-                            data=[{"Metric": metric, "Score": f"{score:.4f}" if score is not None else "N/A"} 
-                                 for metric, score in coherence_scores.items()],
-                            style_table={"overflowX": "auto"},
-                            style_cell={"textAlign": "left", "padding": "10px"},
-                            style_header={"backgroundColor": "rgb(230, 230, 230)", "fontWeight": "bold"}
-                        ),
-                    ], className="p-4 border rounded bg-white mb-4"),
-                    
-                    # Topic diversity
-                    html.Div([
-                        html.H3("Topic Diversity", className="text-lg font-semibold mb-2"),
-                        html.Div([
-                            html.Span(f"{topic_diversity:.4f}", className="text-2xl font-bold"),
-                            html.Span(" / 1.0", className="text-gray-500")
-                        ], className="flex items-center"),
-                        html.P("Higher scores indicate more diverse topics", className="text-sm text-gray-600 mt-1")
-                    ], className="p-4 border rounded bg-white mb-4"),
-                
-                    # Topic summary
-                    
-                    html.Div([
-                        html.H3("Topic Summary", className="text-lg font-semibold mb-2"),
-                        dash_table.DataTable(
-                            id="topic-summary",
-                            columns=[
-                                {"name": "Topic", "id": "Topic"},
-                                {"name": "Count", "id": "Count"},
-                                {"name": "Name", "id": "Name"},
-                            ],
-
-                            # data=topic_info.to_dict("records"),
-                            data=topic_info[["Topic", "Count", "Name"]].to_dict("records"),
-                            style_table={"overflowX": "auto"},
-                            style_cell={"textAlign": "left", "padding": "10px"},
-                            style_header={"backgroundColor": "rgb(230, 230, 230)", "fontWeight": "bold"},
-                            page_size=10
-                        ),
-                    ], className="p-4 border rounded bg-white"),
-                ], className="mb-6"),
-            ], className="w-full lg:w-1/3 p-4"),
+        # Define the function to create a topic card
+        def create_topic_card(topic_id):
+            if topic_id is None:
+                return html.Div("Select a topic to view details", className="p-4 text-gray-500")
             
-
-            # Visualizations
+            docs = topic_docs.get(topic_id, [])
+            topic_words = topic_model.get_topic(topic_id)
+            topic_name = f"Topic {topic_id}"
+            
+            return html.Div([
+                html.H3(topic_name, className="text-lg font-semibold mb-2"),
+                html.Div([
+                    html.Span("Keywords: ", className="font-semibold"),
+                    html.Span(", ".join([word for word, _ in topic_words[:7]]))
+                ], className="mb-2 text-sm"),
+                html.H4("Sample Documents:", className="font-medium mb-1"),
+                html.Ul([
+                    html.Li([
+                        html.Div(doc[:200] + "..." if len(doc) > 200 else doc),
+                        html.Div(f"Probability: {prob:.4f}", className="text-xs text-gray-500")
+                    ], className="mb-2") 
+                    for doc, prob in docs
+                ], className="list-disc pl-5 text-sm")
+            ], className="p-4 border rounded bg-white")
+        
+        # Set up the layout with dropdown and content area
+        return html.Div([
+            html.H2("Topic Details", className="text-xl font-bold mb-3"),
             html.Div([
-                # Topic visualization tabs
-                html.Div([
-                    html.H2("Topic Visualizations", className="text-xl font-bold mb-3"),
-                    dcc.Tabs([
-                        dcc.Tab(label="Topic Overview", children=[
-                            dcc.Graph(
-                                id="topics-overview",
-                                figure=topic_model.visualize_topics(),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
+                html.Label("Select Topic:", className="font-medium mr-2"),
+                dcc.Dropdown(
+                    id="topic-dropdown",
+                    options=topic_options,
+                    value=None,
+                    clearable=False,
+                    className="w-64"
+                )
+            ], className="mb-4"),
+            html.Div(id="topic-card-container", className="w-full")
+        ], className="w-full p-4")
 
-                        dcc.Tab(label="Topic Terms", children=[
-                            dcc.Graph(
-                                id="barchart-graph",
-                                figure=topic_model.visualize_barchart(top_n_topics=10),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
 
-                        dcc.Tab(label="Similarity Matrix", children=[
-                            dcc.Graph(
-                                id="similarity-matrix",
-                                figure=topic_model.visualize_heatmap(),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
-
-                        dcc.Tab(label="Document Map", children=[
-                            dcc.Graph(
-                                id="documents-map",
-                                figure=visualize_topics_2d(
-                                    topics=topics,
-                                    reduced_embeddings=reduced_embeddings,
-                                    docs=docs
-                                ),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
-
-                        dcc.Tab(label="Topic Over Time", children=[
-                            dcc.Graph(
-                                id="topic-over-time",
-                                figure=topic_model.visualize_topics_over_time(topics_over_time, topics=[-1, 0, 1, 2, 3, 4]),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
-
-                        dcc.Tab(label="Topic Hierarchy", children=[
-                            dcc.Graph(
-                                id="hierarchy-graph",
-                                figure=topic_model.visualize_hierarchy(),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
-
-                        dcc.Tab(label="Topic Distribution", children=[
-                            dcc.Graph(
-                                id="distribution-graph",
-                                figure=topic_model.visualize_distribution(probs[:10], topics[:10]),
-                                style={"height": "600px"}
-                            )
-                        ], className="p-4"),
-                    ], className="mb-4"),
-                ], className="mb-6 bg-white border rounded p-4"),
+class DashboardBuilder:
+    def __init__(self, topic_model, topics, probs, docs, timestamps, reduced_embeddings,
+                 coherence_scores, topic_diversity):
+        self.topic_model = topic_model
+        self.topics = topics
+        self.probs = probs 
+        self.docs = docs
+        self.timestamps = timestamps
+        self.reduced_embeddings = reduced_embeddings
+        self.coherence_scores = coherence_scores
+        self.topic_diversity = topic_diversity
+        self.topic_info = topic_model.get_topic_info()
+        
+        # Calculate additional data for dashboard
+        self.topic_docs = self._get_topic_documents()
+        self.topics_over_time = topic_model.topics_over_time(docs, timestamps=timestamps)
+        
+    def _get_topic_documents(self):
+        """Get sample documents for each topic"""
+        topic_docs = {}
+        for topic_id in set(self.topics):
+            if topic_id == -1:  # Skip outliers
+                continue
                 
-
-                # Topic explorer
-                html.Div([
-                    html.H2("Topic Explorer", className="text-xl font-bold mb-3"),
-                    html.Div([
-                        html.Label("Select Topic:", className="block mb-2 font-semibold"),
-                        dcc.Dropdown(
-                            id="topic-selector",
-                            options=[
-                                {"label": f"Topic {row['Topic']}: {row['Name']}", "value": row["Topic"]}
-                                for _, row in topic_info.iterrows() if row["Topic"] != -1
-                            ],
-                            value=topic_info.iloc[1]["Topic"] if len(topic_info) > 1 else None,
-                            className="mb-4"
-                        ),
-                        html.Div(id="topic-details", className="mt-4"),
-                    ], className="p-4"),
-                ], className="bg-white border rounded p-4"),
-            ], className="w-full lg:w-2/3 p-4"),
-        ], className="flex flex-wrap"),
-    ], className="container mx-auto pb-10")
-    
-    # Topic details callback
-    @app.callback(
-        Output("topic-details", "children"),
-        Input("topic-selector", "value")
-    )
-    def update_topic_details(topic_id):
-        if topic_id is None:
-            return html.Div("Select a topic to view details", className="text-gray-500")
+            indices = [i for i, t in enumerate(self.topics) if t == topic_id]
+            if indices:
+                # Get up to 5 sample documents for each topic
+                sample_indices = indices[:5]
+                topic_docs[topic_id] = [(self.docs[i], self.probs[i]) for i in sample_indices]
+                
+        return topic_docs
         
-        # Get topic terms
-        terms = topic_model.get_topic(topic_id)
+    def create_layout(self):
+        """Create the complete dashboard layout"""
+        return html.Div([
+            # Header
+            html.Div([
+                html.H1("Review Topics Dashboard", className="text-2xl font-bold mb-2"),
+                html.P("Interactive visualization of topic modeling results", className="text-gray-600"),
+            ], className="p-4 bg-gray-100 border-b"),
+            
+            # Main content area
+            html.Div([
+                # Left column: Model performance metrics
+                DashboardComponents.create_model_performance_section(
+                    self.coherence_scores, 
+                    self.topic_diversity,
+                    self.topic_info
+                ),
+                
+                # Right column: Topic visualizations
+                DashboardComponents.create_topic_visualizations(
+                    self.topic_model,
+                    self.topics,
+                    self.reduced_embeddings,
+                    self.docs,
+                    self.topics_over_time
+                ),
+            ], className="flex flex-wrap"),
+            
+            # Bottom section: Topic details with sample documents
+            DashboardComponents.create_topic_details_section(
+                self.topic_docs,
+                self.topic_model
+            )
+        ])
         
-        # Create topic word table
-        terms_table = dash_table.DataTable(
-            columns=[
-                {"name": "Term", "id": "term"},
-                {"name": "Weight", "id": "weight"}
-            ],
-            data=[{"term": term, "weight": f"{weight:.4f}"} for term, weight in terms],
-            style_table={"overflowX": "auto"},
-            style_cell={"textAlign": "left", "padding": "10px"},
-            style_header={"backgroundColor": "rgb(230, 230, 230)", "fontWeight": "bold"}
+    def build_dashboard(self, port=8050, debug=False, dev_tools_hot_reload=False):
+        """Create and run the dashboard application"""
+        app = dash.Dash(
+            __name__,
+            external_stylesheets=[
+                "https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css"
+            ]
         )
         
-        # Create sample documents section
-        samples_div = html.Div([
-            html.H4("Sample Documents", className="text-lg font-semibold mb-2"),
-            html.P("No sample documents available", className="text-gray-500")
-        ])
+        app.layout = self.create_layout()
         
-        if topic_id in topic_docs:
-            sample_items = []
-            for doc, prob in topic_docs[topic_id]:
-                sample_items.append(html.Div([
-                    html.P(f"{doc[:200]}..." if len(doc) > 200 else doc, className="mb-1"),
-                    html.P(f"Probability: {prob:.4f}", className="text-sm text-gray-600 mb-3")
-                ]))
+        # Add callbacks
+        self._add_callbacks(app)
+        
+        # Return the app
+        return app
+        
+    def _add_callbacks(self, app):
+        """Add interactive callbacks to the dashboard"""
+        
+        # Callback to update the topic card when dropdown selection changes
+        @app.callback(
+            Output("topic-card-container", "children"),
+            Input("topic-dropdown", "value")
+        )
+        def update_topic_card(selected_topic):
+            if selected_topic is None:
+                return html.Div("Select a topic to view details", className="p-4 text-gray-500")
             
-            samples_div = html.Div([
-                html.H4("Sample Documents", className="text-lg font-semibold mb-2"),
-                html.Div(sample_items, className="border-t pt-2")
-            ])
-        
-        return html.Div([
-            html.H3(f"Topic {topic_id}: {topic_model.get_topic_info().loc[topic_model.get_topic_info()['Topic'] == topic_id, 'Name'].values[0]}", 
-                   className="text-xl font-semibold mb-3"),
-            html.Div([
-                html.H4("Top Terms", className="text-lg font-semibold mb-2"),
-                terms_table,
-            ], className="mb-4"),
-            samples_div
-        ])
-    
-    logger.info(f"Dashboard created, ready to run on port {port}")
-    return app
+            # Get topic details
+            docs = self.topic_docs.get(selected_topic, [])
+            topic_words = self.topic_model.get_topic(selected_topic)
+            topic_name = f"Topic {selected_topic}"
+            
+            # Create card for the selected topic
+            return html.Div([
+                html.H3(topic_name, className="text-lg font-semibold mb-2"),
+                html.Div([
+                    html.Span("Keywords: ", className="font-semibold"),
+                    html.Span(", ".join([word for word, _ in topic_words[:7]]))
+                ], className="mb-2 text-sm"),
+                html.H4("Sample Documents:", className="font-medium mb-1"),
+                html.Ul([
+                    html.Li([
+                        html.Div(doc[:200] + "..." if len(doc) > 200 else doc),
+                        html.Div(f"Probability: {prob:.4f}", className="text-xs text-gray-500")
+                    ], className="mb-2") 
+                    for doc, prob in docs
+                ], className="list-disc pl-5 text-sm")
+            ], className="p-4 border rounded bg-white")
 
-
-def main(config_path: str):
-    """
-    Main function to run the topic modeling pipeline.
+# Main application 
+def main():
+    # Load configuration
+    parser = argparse.ArgumentParser(description="Topic Modeling with BERTopic")
+    parser.add_argument("--config", default="config.yaml", help="Path to configuration file")
+    args = parser.parse_args()
     
-    Args:
-        config_path: Path to the configuration YAML file
-    """
     try:
-        # Load configuration
-        logger.info(f"Loading configuration from {config_path}")
-        with open(config_path, "r") as f:
+        with open(args.config, "r") as f:
             config = yaml.safe_load(f)
-        
-        # Create output directory if it doesn't exist
-        output_dir = config["output"]["output_dir"]
-        os.makedirs(output_dir, exist_ok=True)
-        
+            logger.info("Configuration loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading configuration: {str(e)}")
+        raise
+    
+    try:
         # Load data
         data_loader = DataLoader(config["data"])
-        data = data_loader.load_reviews()
-        reviews = data.review
-        timestamp = data.yearMonth
-        
-        if len(reviews) == 0:
-            logger.error("No usable data available. Stopping pipeline.")
-            return
+        reviews_df = data_loader.load_reviews()
+        documents = reviews_df["review"].tolist()
+        timestamps = reviews_df["timestamp"].tolist()
         
         # Configure and train model
-        configurer = BERTopicConfigurator(config["model"])
-        modeler = TopicModeler(configurer.topic_model)
-        modeler.fit(reviews.tolist())
+        bert_config = BERTopicConfigurator(config["model"])
+        modeler = TopicModeler(bert_config.topic_model)
+        topics, probs, embeddings, reduced_embeddings = modeler.fit(documents)
         
         # Evaluate model
         evaluator = Evaluator(modeler.topic_model, config["evaluation"])
-        metric_scores = evaluator.calculate_metrics(reviews.tolist())
-        coherence_scores = metric_scores["coherence_scores"]
-        topic_diversity = metric_scores["topic_diversity"]
+        metrics = evaluator.calculate_metrics(documents)
         
-        # Save model if configured
-        if config["output"]["save_model"]:
-            model_path = modeler.save(output_dir)
-            logger.info(f"Model saved to {model_path}")
+        # Save model
+        if config.get("save_model", False):
+            output_dir = config.get("output_dir", "./results")
+            os.makedirs(output_dir, exist_ok=True)
+            modeler.save(output_dir)
         
-        
-        # Create and run dashboard
-        app = build_dashboard(
+        # Build and run dashboard
+        dashboard_builder = DashboardBuilder(
             topic_model=modeler.topic_model,
-            topics=modeler.topics,
-            probs=modeler.probs,
-            docs=reviews.tolist(),
-            timestamps=timestamp.tolist(),
-            reduced_embeddings=modeler.reduced_embeddings,
-            coherence_scores=coherence_scores,
-            topic_diversity=topic_diversity,
-            port=config["output"]["dashboard_port"]
+            topics=topics,
+            probs=probs,
+            docs=documents,
+            timestamps=timestamps,
+            reduced_embeddings=reduced_embeddings,
+            coherence_scores=metrics["coherence_scores"],
+            topic_diversity=metrics["topic_diversity"]
         )
         
-        logger.info(f"Starting dashboard on port {config['output']['dashboard_port']}")
-        app.run(host="0.0.0.0", port=config["output"]["dashboard_port"], debug=True)
+        app = dashboard_builder.build_dashboard(
+            port=config.get("dashboard", {}).get("port", 8050),
+            debug=config.get("dashboard", {}).get("debug", True)
+        )
         
-    except FileNotFoundError as e:
-        logger.error(f"File not found: {str(e)}")
-    except yaml.YAMLError as e:
-        logger.error(f"Error parsing YAML configuration: {str(e)}")
+        # Run the dashboard
+        app.run_server(
+            host=config.get("dashboard", {}).get("host", "0.0.0.0"),
+            port=config.get("dashboard", {}).get("port", 8050),
+            debug=config.get("dashboard", {}).get("debug", True)
+        )
+        
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        logger.debug("Error details:", exc_info=True)
-
+        logger.error(f"Error in main execution: {str(e)}\n{traceback.format_exc()}")
+        raise
 
 if __name__ == "__main__":
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="BERTopic modeling pipeline")
-    parser.add_argument(
-        "--config", 
-        type=str, 
-        default="config.yaml",
-        help="Path to configuration YAML file"
-    )
-    args = parser.parse_args()
-    
     # Set environment variable to avoid tokenizers parallelism issues
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    
-    # Run the pipeline
-    main(args.config)
+    main()
