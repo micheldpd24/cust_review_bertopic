@@ -84,16 +84,6 @@ A 2D visualization of the topics and their associated documents. Each point repr
 A visualization of frequency of topics over time
 ![Topic Hierarchy](assets/topic_over_time.png)
 
-### **6. Topic Hierarchy**
-A hierarchical representation of the topics, showing how they are grouped and related to each other.
-
-![Topic Hierarchy](assets/topic_hierarchy.png)
-
-### **7. Topic Distribution**
-A distribution plot showing the probability distribution of topics across the dataset.
-
-![Topic Distribution](assets/topic_distribution.png)
-
 ---
 
 ## **Configuration**
@@ -113,12 +103,13 @@ model:
   language: "french"
   min_topic_size: 20
   nr_topics: "auto"
-  top_n_words: 13
+  top_n_words: 10
   umap:
     n_neighbors: 15
     n_components: 5
     min_dist: 0.0
     metric: "cosine"
+    random_state: 42
   hdbscan:
     min_cluster_size: 15
     metric: "euclidean"
@@ -126,18 +117,22 @@ model:
     prediction_data: true
   vectorizer:
     stop_words: None
-    ngram_range: [1, 2]
+    ngram_range: [1, 3]
 
 evaluation:
   coherence_metrics:    # Coherence metrics to calculate
-    - "c_v"
-    - "u_mass"
-    - "c_npmi"
+    - "c_v"  # Coherence Measure V
+    - "u_mass"  # UMass Coherence
+    - "c_npmi" # Normalized Pointwise Mutual Information
 
 output:
   save_model: true   # Whether to save the trained model
   output_dir: "data/results"  # Directory to save model outputs
-  dashboard_port: 8050  # Port for the dashboard  
+
+dasboard:
+  port: 8050  # Port for the dashboard  
+  host: "0.0.0.0"
+  debug: True
 ```
 
 ---
@@ -189,7 +184,7 @@ docker build -t bertopic-container .
 ```bash
 docker run -p 8051:8050 \
            -v "$PWD/data/full:/data/full" \
-           -v "$PWD/data/output:/data/output" \
+           -v "$PWD/data/results:/data/results" \
            -v "$PWD:/app" \
            bertopic-container
 ```
@@ -205,10 +200,31 @@ http://localhost:8051
 The pipeline evaluates the topic model using the following metrics:
 1. **Coherence Scores**:
    - Measures the interpretability of topics.
-   - Supported metrics: `c_v`, `u_mass`, `c_npmi`.
+   - Supported metrics: 
+      - *Coherence Measure V (`c_v`)*:
+      
+        Measures the coherence of topics based on the normalized pointwise mutual information (NPMI) between pairs of top words in a topic. It evaluates how often these words co-occur in the corpus., 
+
+        Range: Typically between 0 and 1 (higher is better).
+
+      - UMass Coherence (`u_mass`): 
+        
+        Measures the log-conditional probability of word co-occurrences. It calculates the likelihood of one word appearing given the presence of another word in the corpus, 
+
+        Range: Often negative (closer to zero is better).
+
+      - *Normalized Pointwise Mutual Information (`c_npmi`): 
+        
+        C_NPMI normalizes the PMI score to ensure coherence values fall within a fixed range (typically [-1, 1]). It penalizes unrelated word pairs more heavily than other metrics.
+
+        A less negative score (closer to zero) indicates better coherence.
+
+
 
 2. **Topic Diversity**:
    - Measures the uniqueness of topics by calculating the ratio of unique words to total words across all topics.
+
+      Range: Between 0 and 1 (higher is better).
 
 ---
 ## **References**
